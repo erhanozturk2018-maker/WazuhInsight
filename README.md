@@ -8,6 +8,10 @@ files, agents and agent groups, targeted service-status checks, outgoing mail
 (Postfix) settings, project-owned rsyslog rule files, and a package
 check/install flow for `rsyslog` and `postfix`.
 
+Optionally, and entirely unrelated to the manager, it can also proxy
+questions to a separate document-answering (RAG) service and show the
+answer on an **Ask** page — off by default, see Section 7.
+
 **Two channels reach the manager, and which one a feature uses depends on
 what it touches:**
 
@@ -48,10 +52,12 @@ wazuh-dashboard/
 │   │   ├── agents.py                           # Agents, groups, agent.conf, service inventory
 │   │   ├── custom_files.py                      # Custom decoder/rule files
 │   │   ├── service_checks.py                     # Service checks: collector + decoder + rule together
-│   │   ├── ssh_transport.py                       # The three remaining run_*_via_ssh() senders
-│   │   ├── rsyslog.py                              # rsyslog rule-file wrappers          [SSH]
-│   │   ├── plugins.py                               # Package check/install + "plugins" state  [SSH]
-│   │   └── logs.py                                   # Audit log writing
+│   │   ├── manager_control.py                     # Restarts the manager after an API-backed write
+│   │   ├── ssh_transport.py                        # The four remaining run_*_via_ssh() senders
+│   │   ├── rsyslog.py                               # rsyslog rule-file wrappers          [SSH]
+│   │   ├── plugins.py                                # Package check/install + "plugins" state  [SSH]
+│   │   ├── rag_pipeline.py                            # Proxy to the optional RAG assistant service
+│   │   └── logs.py                                     # Audit log writing
 │   └── routes/                                  # One APIRouter per route family
 │       ├── __init__.py
 │       ├── dashboard.py                          # /, /wazuh-webhook, /api/alerts, /api/clear, /health
@@ -59,7 +65,9 @@ wazuh-dashboard/
 │       ├── agents.py                               # /agents, /api/agents*, /api/groups*
 │       ├── pipeline.py                              # /pipeline* (Collect / Parse)
 │       ├── alerting.py                               # /alerting* (Email / Integrations)
-│       └── settings.py                                # /settings* (General / Packages)
+│       ├── manager.py                                # POST /api/manager/restart (manual retry)
+│       ├── rag.py                                     # /rag, /rag/ask — off by default, see Section 7
+│       └── settings.py                                 # /settings* (General / Packages / Features)
 ├── tests/                                            # pytest suite (run: pytest)
 ├── pytest.ini                      # pytest config (sets pythonpath = .)
 ├── Dockerfile                      # Container image (see "Running with Docker")
@@ -68,19 +76,21 @@ wazuh-dashboard/
 ├── .env                             # API + SSH connection settings (not committed, see "Environment variables")
 ├── data/                            # Created automatically at runtime, DO NOT commit
 │   ├── secret.key                   # Session-signing key
-│   ├── settings.json                 # Host/port/note + mail settings + package status (no plaintext passwords)
+│   ├── settings.json                 # Host/port/note + mail settings + package status + feature flags
 │   ├── users.json                     # Hashed user credentials
 │   ├── config_backups/                 # ossec.conf copies taken before every write (5 most recent)
 │   └── app_logs/                        # Audit log
 ├── templates/
 │   ├── _sidebar.html                # Shared navigation, included by every logged-in page
-│   ├── index.html                    # Overview (alerts)
-│   ├── agents.html                    # Agents + agent groups
-│   ├── pipeline.html                   # Pipeline (Collect / Parse sub-tabs)
-│   ├── alerting.html                    # Alerting (Email / Integrations sub-tabs)
-│   ├── settings.html                     # Console (General / Packages sub-tabs)
-│   ├── login.html                         # Login page
-│   └── register.html                       # Registration page
+│   ├── _restart_overlay.html         # Blocking "applying changes" overlay, included by Pipeline/Alerting
+│   ├── index.html                     # Overview (alerts)
+│   ├── agents.html                     # Agents + agent groups
+│   ├── pipeline.html                    # Pipeline (Collect / Parse sub-tabs)
+│   ├── alerting.html                     # Alerting (Email / Integrations sub-tabs)
+│   ├── settings.html                      # Console (General / Packages / Features sub-tabs)
+│   ├── rag.html                            # Ask — off by default, see Section 7
+│   ├── login.html                           # Login page
+│   └── register.html                         # Registration page
 ├── static/
 │   ├── css/style.css                # Styling
 │   ├── js/app.js                     # Client-side logic (search, filters, chart, detail panel)
@@ -902,6 +912,48 @@ the network path and `hook_url` are correctly configured.
 
 ---
 
+## 7) Optional: connecting a RAG assistant ("Ask")
+
+The dashboard can proxy questions to a separate document-answering service
+and show the result on a new **Ask** page — a question box that answers from
+documents you've ingested elsewhere, entirely unrelated to the Wazuh
+manager. This is **off by default** and touches nothing else in the app
+until you turn it on; skip this section if you don't need it.
+
+The service itself is a separate project, not part of this repository:
+**[RAG-Pipeline](https://github.com/erhanozturk2018-maker/RAG-Pipeline)**.
+Clone it, follow its own README to install and run it, and note the address
+it ends up listening on (its default is `http://localhost:8000`).
+
+**Once that service is running:**
+
+1. **Point the dashboard at it** — add to `.env`:
+   ```
+   RAG_API_URL=http://localhost:8000
+   ```
+   Only needed if the service is *not* on `localhost:8000`; that's already
+   the default (see the environment variable table below).
+2. **Turn the feature on** — log into the dashboard, go to **Console →
+   Features**, and enable "RAG Assistant". This step is not optional and
+   not covered by `.env`: the toggle lives in `data/settings.json`, on
+   purpose, so the feature stays invisible on any dashboard that has never
+   been told about the other service, even if `RAG_API_URL` happens to be
+   set. An **Ask** entry appears in the sidebar as soon as it's on.
+3. **Ingest documents** — done through the RAG service's own API (its
+   `/ingest` endpoint), not through this dashboard. The Ask page's
+   "Indexed documents" panel is read-only, so what it can answer from is
+   managed entirely on that side.
+
+**How it talks to that service:** every request is proxied through this
+dashboard's own backend (`dashboard_core/services/rag_pipeline.py`) —
+the browser never calls `RAG_API_URL` directly. The same reasoning as the
+Wazuh API client in Section 5: a browser-side call would need CORS headers
+the service doesn't send, and would resolve `localhost` to whichever
+machine the browser happens to be running on, not necessarily the machine
+actually running the service.
+
+---
+
 ## Environment variables (`.env`)
 
 Two groups are required, one per channel (Section 5.4). Everything else
@@ -921,15 +973,48 @@ falls back to a sensible default if omitted.
 | `WAZUH_SSH_PORT` | SSH port on the manager | `22` |
 | `WAZUH_SSH_USER` | Restricted SSH user (Section 5.2) | *(required)* |
 | `WAZUH_SSH_KEY_PATH` | Path to the private key (Section 5.2) | *(required)* |
+| `RAG_API_URL` | Base URL of the optional RAG assistant service (Section 7) | `http://localhost:8000` |
+| `RAG_API_TIMEOUT` | Seconds to wait for one call to it | `30` |
 
 The API variables cover most of the product; the SSH ones cover mail
 delivery, rsyslog files and package management. Missing one group disables
-only that group's features.
+only that group's features. The `RAG_*` variables are read even if you
+never set them — they only matter once the Ask feature is turned on
+(Section 7), and are harmless to leave at their defaults otherwise.
 
 Host/port set via the **Settings** page (General tab) take priority over
 `DASHBOARD_HOST`/`DASHBOARD_PORT` once saved.
 
 ---
+
+## v10.0 — restart guarantee on the API path, opt-in RAG assistant
+
+- **API-backed writes now restart the manager.** Moving `ossec.conf`,
+  decoder and rule writes to the Wazuh API (v9.0) meant they stopped
+  passing through the SSH wrapper's central restart — Wazuh does not
+  hot-reload any of these, so a save could land on disk and never take
+  effect. `services/manager_control.py` restores the guarantee: every such
+  write restarts the manager over the same SSH `restart` selector the
+  wrapper already had. A failed restart doesn't fail the write (the change
+  is on disk); it surfaces an "Apply changes" retry
+  (`POST /api/manager/restart`, `routes/manager.py`) instead. Saves that
+  restart something now show a blocking overlay while it happens
+  (`templates/_restart_overlay.html`).
+- **New, off by default: an "Ask" page for an optional RAG assistant** —
+  a question box that proxies to a separate document-answering service and
+  shows the answer, unrelated to the Wazuh manager. See Section 7 for
+  setup. Disabled until turned on from **Console → Features**, and gated
+  at the route level as well as in the sidebar — the flag lives in
+  `data/settings.json`, not `.env`, specifically so the page cannot appear
+  on a dashboard that was never told the other service exists.
+  New: `services/rag_pipeline.py`, `routes/rag.py`, `templates/rag.html`.
+  New `.env`: `RAG_API_URL`, `RAG_API_TIMEOUT`.
+- **Fixed:** the Wazuh API's rule/decoder upload endpoint reports
+  `XML syntax error` for some rejections that have nothing to do with the
+  XML — most often a `<field>`/`<match>`/`<regex>` pattern mixing `(...)`
+  grouping with `|`, which the default OSRegex engine doesn't support. The
+  message now explains the likely cause and the fix (drop the grouping, or
+  add `type="pcre2"`) instead of repeating a misleading string.
 
 ## v9.0 — Wazuh API as the primary channel, regrouped interface
 
