@@ -34,12 +34,13 @@ No ORM, no database (`../architecture/system-overview.md` explains why).
 Every read/write of `data/*.json` goes through the shared
 `load_json(path, default)` / `save_json(path, data)` helpers in `dashboard_core/storage.py` — never
 `open()` a data file directly elsewhere. Each file has exactly one logical
-owner even though `settings.json` holds two unrelated concerns
-(host/port/note and mail) under separate top-level keys — see
-`_settings_context()` / `save_mail_settings()` for the pattern of updating
-one sub-key without disturbing the other. Follow this sub-key pattern
-if you add a new settings category; don't create a new top-level file for
-every new setting.
+owner even though `settings.json` holds several unrelated concerns
+(host/port/note, mail, plugin status, feature flags) under separate
+top-level keys — see `_settings_context()` / `save_mail_settings()` /
+`save_feature_flags()` for the pattern of updating one sub-key without
+disturbing the others. Follow this sub-key pattern if you add a new
+settings category; don't create a new top-level file for every new
+setting.
 
 ## SSH command construction: always `shlex.quote()`, never string-format
 
@@ -133,8 +134,10 @@ environment), `dashboard_core/auth.py`, `dashboard_core/validation.py`,
 `dashboard_core/storage.py`, `dashboard_core/alerts.py`,
 `dashboard_core/services/` (manager-facing: the Wazuh API transport and
 its consumers — `wazuh_api`, `ossec_config`, `agents`, `custom_files`,
-`service_checks` — plus the three remaining SSH senders and their
-consumers) and `dashboard_core/routes/` (one `APIRouter` per route family).
+`service_checks`, `manager_control` — plus the four SSH senders and their
+consumers, and `rag_pipeline`, the one service module that talks to
+neither the manager nor SSH) and `dashboard_core/routes/` (one
+`APIRouter` per route family).
 `dashboard_core/app.py` holds the `FastAPI()` object, the static mount and
 the router includes — assembly only. The root `main.py` holds *only* the
 entry point: it asks `storage.load_run_host_port()` for the bind address and

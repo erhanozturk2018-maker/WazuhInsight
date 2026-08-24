@@ -132,15 +132,18 @@ end-to-end, and it never touches disk on the dashboard:
   deliberately never the password. Any new secret field added to this flow
   must follow the same write-only, never-logged, boolean-flag-only pattern.
 
-## SSRF / trust note on manager-directed network calls
+## SSRF / trust note on outbound network calls
 
-Both channels connect to an address configured in `.env` — `WAZUH_API_URL`
-for the API, `WAZUH_SSH_HOST` for SSH. These are operator-controlled config
-values, not user input from a request, so neither is a per-request
-injection surface. Keep it that way: **never let a form field influence the
-target host, port, user, key or API URL.** Those values come from `.env`
-only, read at call time from `config.*` so tests can patch them, but never
-from a request body.
+All three outbound targets connect to an address configured in `.env` —
+`WAZUH_API_URL` for the API, `WAZUH_SSH_HOST` for SSH, and `RAG_API_URL`
+for the optional assistant proxy (`services/rag_pipeline.py`). These are
+operator-controlled config values, not user input from a request, so none
+of them is a per-request injection surface. Keep it that way: **never let
+a form field influence a target host, port, user, key or URL** — including
+`RAG_API_URL`, even though what it reaches is unrelated to the manager and
+carries no manager credential. Those values come from `.env` only, read at
+call time from `config.*` so tests can patch them, but never from a
+request body.
 
 The path *within* the API is a different matter and does take user input —
 a file name, a group name, an agent id all end up in a URL. Every one of

@@ -167,6 +167,15 @@ outside the API client itself.
   actually published on that specific CDN before assuming a failure is
   network/extension-related.
 
+- **Setting `RAG_API_URL` and expecting the Ask page to appear.** It
+  won't — `.env` and the feature flag are independent by design. The
+  sidebar link and the routes are both gated on
+  `load_feature_flags()["rag_assistant"]`, which only **Console →
+  Features** sets. `RAG_API_URL` has a default precisely so it can be left
+  unset on installs that never use this feature at all
+  (`design-decisions.md`). Setting the URL configures *where*
+  a question would go; it does not turn the feature on.
+
 - **Hand-editing a file under `static/vendor/`.** These are unmodified
   third-party library files (Chart.js, Lucide, font files) copied in
   wholesale, not authored in this repo. Any manual edit is silently wiped

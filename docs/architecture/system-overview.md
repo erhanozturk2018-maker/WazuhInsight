@@ -30,7 +30,19 @@ built-in REST API, already running on the manager as part of the product.
 express because they are the host operating system's concern rather than
 Wazuh's: Postfix (mail relay and SASL credentials), rsyslog rule files
 under `/etc/rsyslog.d/`, and package installation. These still go through
-one fixed forced command (`../security/ssh-boundary.md`).
+one fixed forced command (`../security/ssh-boundary.md`). A fourth SSH
+target, `restart`, does not belong to either category above — it exists to
+make the *API* channel's writes take effect (see "Where the restart
+invariant went" below).
+
+**A third, unrelated integration — the optional RAG assistant.** Not a
+channel to the manager at all: `services/rag_pipeline.py` proxies
+questions to a separate, operator-chosen document-answering service,
+entirely outside the two-machine boundary this document is about. It's
+mentioned here only to say clearly what it *isn't* — it doesn't touch
+`ossec.conf`, agents, or anything else Wazuh owns, and the manager has no
+part in it. Off by default; see `../development/workflow.md` for the
+opt-in-feature pattern and the README for setup.
 
 ### Why the API, when an earlier decision rejected exactly this
 
@@ -145,6 +157,26 @@ write, `GET /manager/configuration/validation` asks the manager whether the
 result is still valid. A malformed `ossec.conf` stops the manager starting,
 so catching that while the backup is still the newest thing on disk is
 worth one extra round trip.
+
+## Where the restart invariant went
+
+The old rule was "the wrapper restarts services centrally after any
+mutating SSH call" — enforced entirely inside `config-router-wrapper.sh`,
+so nothing that stayed on SSH ever had to think about it. Work that moved
+to the API stopped passing through the wrapper and inherited nothing in
+its place: a save could land on disk, correct, and simply never take
+effect, because Wazuh does not hot-reload `ossec.conf` or the ruleset.
+That shipped as a real regression before it was caught.
+
+**The guarantee was rebuilt on the API side, not merged into the
+wrapper's.** `services/manager_control.py` restarts the manager over the
+same SSH `restart` selector after every `ossec.conf`/decoder/rule write —
+still SSH under the hood, because the API can't reliably report on
+restarting the process serving it, but triggered from the dashboard now
+rather than from a post-dispatch check on the manager. A failed restart
+does not fail the write; it surfaces a retry (`POST /api/manager/restart`).
+Full reasoning: `../knowledge/design-decisions.md`, "Restarting after an
+API-backed write".
 
 ## Non-goals (deliberate, not oversights)
 

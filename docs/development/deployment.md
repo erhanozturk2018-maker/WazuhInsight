@@ -6,13 +6,22 @@ step setup commands — those are in `README.md` (Sections 1–5); this file
 explains the facts behind those steps that matter for making changes
 correctly.
 
-## Two deployment targets, never conflated
+## Two deployment targets, never conflated — plus one optional third
 
 | Artifact | Runs on | Fixed path |
 |---|---|---|
 | `main.py` + the backend modules (`config`/`auth`/`validation`/`storage`/`alerts`, `dashboard_core/services/`, `dashboard_core/routes/`) + `templates/` + `static/` + `data/` | Dashboard machine (any OS) | Wherever the repo is checked out |
 | `wazuh-integration/webhook/*` | Wazuh manager (Linux only) | `/var/ossec/integrations/` |
 | `wazuh-integration/ssh-dispatch/**` | Wazuh manager (Linux only) | `/usr/local/bin/` |
+
+The RAG assistant service is a **fourth artifact this repository does not
+own or deploy** — a separate project, run wherever the operator chooses,
+addressed by `RAG_API_URL` (README Section 7). It's mentioned here only so
+it isn't mistaken for a missing row above: unlike the other two targets,
+there is no fixed path for it, because the dashboard never assumes
+anything about where it runs beyond that one URL. The feature is off until
+`data/settings.json` says otherwise, so its absence is the expected state
+on a fresh checkout, not a partial deployment.
 
 The manager-side paths are **fixed by convention across the whole system**
 — the dashboard never sends a path to the manager (`../security/ssh-boundary.md`

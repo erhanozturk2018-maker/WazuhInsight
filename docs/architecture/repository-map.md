@@ -13,8 +13,10 @@ wazuh-dashboard/
 ├── dashboard_core/          # THE installable package. All backend behaviour.
 │   ├── app.py                 # FastAPI() object, static mount, router includes. Assembly only.
 │   ├── config.py              # Constants + shared singletons: API_* (Wazuh API), SSH_*,
+│   │                             # RAG_API_URL/TIMEOUT (optional assistant service),
 │   │                             # HOST/PORT/MAX_ALERTS, DATA_DIR, file paths, SESSION_*,
-│   │                             # DEFAULT_MAIL_SETTINGS, the shared Jinja2 `templates`.
+│   │                             # DEFAULT_MAIL_SETTINGS, DEFAULT_FEATURE_FLAGS, the shared
+│   │                             # Jinja2 `templates` AND its `feature_enabled()` global.
 │   │                             # Read as `config.X` at call time. BASE_DIR is the PROJECT
 │   │                             # ROOT (one level up) - templates/static/data live outside.
 │   ├── auth.py                # Password hashing, user records, session tokens, get_current_user().
@@ -32,7 +34,12 @@ wazuh-dashboard/
 │   │   ├── custom_files.py      # Custom decoder/rule files (listing carries no content).
 │   │   ├── plugins.py           # deps check/install + settings.json "plugins" writes.  [SSH]
 │   │   ├── rsyslog.py           # rsyslog rule files + _friendly_error().               [SSH]
-│   │   ├── ssh_transport.py     # The THREE remaining SSH senders: mail / rsyslog / deps.
+│   │   ├── manager_control.py   # Restarts the manager after an API-backed write.       [SSH]
+│   │   ├── ssh_transport.py     # The FOUR SSH senders: mail / rsyslog / deps / restart,
+│   │   │                           # sharing one drain loop (_run()) since all four used
+│   │   │                           # to carry their own copy of the same three bugs.
+│   │   ├── rag_pipeline.py      # Proxy to the optional RAG assistant service. Off by
+│   │   │                           # default; see DEFAULT_FEATURE_FLAGS in config.py.
 │   │   └── logs.py              # Audit log writing (log_action).
 │   └── routes/                # One APIRouter per route family. Nothing here talks to a
 │       │                         # transport directly.
@@ -41,24 +48,33 @@ wazuh-dashboard/
 │       ├── agents.py            # /agents, /api/agents*, /api/groups* + service inventory
 │       ├── pipeline.py          # /pipeline (collect | parse) + /api/pipeline/*; /isp redirect
 │       ├── alerting.py          # /alerting (email | integrations)
-│       └── settings.py          # /settings (general | packages) + redirects for moved URLs
+│       ├── manager.py           # POST /api/manager/restart - the manual "Apply changes" retry
+│       ├── rag.py               # /rag, /rag/ask - 404s unless the feature flag is on
+│       └── settings.py          # /settings (general | packages | features) + redirects
 ├── tests/                   # pytest suite (../development/testing.md).
 ├── data/                        # Runtime-generated. Never hand-edit.
 │   ├── secret.key                 # Session HMAC key
-│   ├── settings.json              # host/port/note + non-secret mail fields + "plugins" status
+│   ├── settings.json              # host/port/note + non-secret mail fields + "plugins"
+│   │                                 # status + "features" flags (DEFAULT_FEATURE_FLAGS)
 │   ├── users.json                 # username -> {salt, hash, created}
 │   ├── config_backups/            # Pre-change copies of ossec.conf, 5 most recent.
 │   │                                 # The manager-side backup guarantee, relocated.
 │   └── app_logs/                  # Audit log
 ├── templates/                       # Jinja2, server-rendered
 │   ├── _sidebar.html                 # SHARED nav, included by every logged-in page.
-│   │                                    # Active item derived from request.url.path.
-│   ├── index.html                     # Dashboard shell
-│   ├── agents.html                     # Agent list + groups card + detail drawer
-│   ├── pipeline.html                    # Collect | Parse  (one tab's data per render)
-│   ├── alerting.html                     # Email (delivery + rules) | Integrations
-│   ├── settings.html                      # General | Packages  (both rendered; local reads)
-│   └── login.html / register.html          # Logged-out layout, no sidebar
+│   │                                    # Active item derived from request.url.path;
+│   │                                    # the Assistant group is further gated by
+│   │                                    # feature_enabled('rag_assistant').
+│   ├── _restart_overlay.html          # SHARED blocking overlay, included by Pipeline and
+│   │                                     # Alerting for any form that restarts the manager.
+│   ├── index.html                      # Dashboard shell
+│   ├── agents.html                      # Agent list + groups card + detail drawer
+│   ├── pipeline.html                     # Collect | Parse  (one tab's data per render)
+│   ├── alerting.html                      # Email (delivery + rules) | Integrations
+│   ├── settings.html                       # General | Packages | Features (all rendered;
+│   │                                          # local reads)
+│   ├── rag.html                             # Ask — only reachable while the feature is on
+│   └── login.html / register.html            # Logged-out layout, no sidebar
 ├── static/
 │   ├── css/style.css                # All styling, incl. the .prov provenance badge
 │   ├── js/app.js                    # ALL client logic. Page-specific blocks guarded by an
@@ -99,8 +115,10 @@ wazuh-dashboard/
 | `services/custom_files.py` | Custom decoder/rule files | The Pipeline page's Parse tab |
 | `services/rsyslog.py` | rsyslog rule files **(SSH)** | The Pipeline page's remote log intake |
 | `services/plugins.py` | Package check/install **(SSH)** | Console → Packages, the `checked_at` rules |
-| `services/ssh_transport.py` | The three remaining SSH senders | What argument shape reaches a manager-side tool |
-| `storage.py` | JSON read/write for `data/*.json` | Storage schema, new settings sub-keys |
+| `services/manager_control.py` | Restarts the manager after an API-backed write **(SSH)** | Why a save didn't take effect, the `restart_failed` redirect flag |
+| `services/ssh_transport.py` | The four SSH senders, one shared drain loop | What argument shape reaches a manager-side tool; the stdout/stderr/timeout handling all four rely on |
+| `services/rag_pipeline.py` | Proxy to the optional RAG assistant service | The Ask page's backend calls; why it's a proxy, not a direct browser call |
+| `storage.py` | JSON read/write for `data/*.json` | Storage schema, new settings sub-keys, `load_feature_flags()` |
 | `auth.py` | Password hashing, user records, cookie sessions | Password policy, session lifetime, signing |
 | `validation.py` | Dashboard-side format checks | Adding/loosening a field's UI-level validation |
 | `alerts.py` | Webhook payload → display schema, in-memory store | Adding a displayed alert field |
@@ -108,7 +126,9 @@ wazuh-dashboard/
 | `routes/agents.py` | `/agents` + agent/group JSON APIs | Any agent or group feature |
 | `routes/pipeline.py` | `/pipeline` — log sources, group collectors, decoders/rules | Any log-pipeline feature |
 | `routes/alerting.py` | `/alerting` — mail delivery, alert rules, integrations | Any notification feature |
-| `routes/settings.py` | `/settings` — this console's own config + packages | Console-local settings only |
+| `routes/manager.py` | `POST /api/manager/restart` | The manual retry when an automatic restart failed |
+| `routes/rag.py` | `/rag`, `/rag/ask` | The Ask page; both routes re-check the feature flag independently of the sidebar |
+| `routes/settings.py` | `/settings` — this console's own config, packages, and feature flags | Console-local settings only |
 
 ## Finding things by task
 
@@ -126,3 +146,5 @@ wazuh-dashboard/
 | Change password/session policy | `auth.py` |
 | Move a function between modules | Update every `from ... import` **and** every `patch(...)` target under `tests/` in the same change |
 | Add a new backend module | Create it under `dashboard_core/`; new subpackages go in `packages` in `pyproject.toml` |
+| Add a feature that has nothing to do with the manager | `routes/rag.py` + `services/rag_pipeline.py` are the template — proxy through the backend, gate behind `config.DEFAULT_FEATURE_FLAGS` + a Console → Features toggle, and check the flag at the route level too, not only in the sidebar (`../development/workflow.md`) |
+| Change why a save didn't take effect | `services/manager_control.py` for API-backed writes, `is_mutating_action()` in `config-router-wrapper.sh` for SSH-backed ones — these are two separate mechanisms, not one |

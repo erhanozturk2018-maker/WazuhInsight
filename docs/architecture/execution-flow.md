@@ -203,3 +203,38 @@ Every protected route → get_current_user() → username or None
 This flow never touches the manager and has no dependency on the API or on
 paramiko — if debugging an auth issue, stay entirely inside `auth.py` and
 `routes/auth.py`.
+
+## Flow 6 — RAG assistant (dashboard → a separate service, opt-in)
+
+The odd one out: no manager involvement at all, and gated by a flag most
+of the other flows don't have.
+
+```
+GET /rag  or  POST /rag/ask
+  → routes/rag.py: load_feature_flags().get("rag_assistant") — checked
+    HERE, independently of the sidebar link that's the operator's normal
+    way in. A request that already knows the URL does not get a pass just
+    because the flag is off.
+  → 404 if off; otherwise:
+  → services/rag_pipeline.py: one pooled requests.Session, plain HTTP,
+    to config.RAG_API_URL — no auth token to manage, unlike wazuh_api.py
+  → (ok, result) back to the route, rendered or returned as JSON
+```
+
+**Why the browser never calls `RAG_API_URL` directly.** Two concrete
+failures, not a style preference: the RAG service doesn't send CORS
+headers permitting the dashboard's origin, so a browser-side `fetch` would
+simply be blocked; and `localhost` inside that `fetch` would resolve to
+whichever machine the *browser* is running on, not necessarily the machine
+actually running the service. Proxying through the backend means
+`RAG_API_URL` is only ever resolved on the one machine it's configured
+for. Same reasoning as `services/wazuh_api.py` existing instead of letting
+a template call the Wazuh API directly.
+
+**Why the flag lives in `settings.json`, not `.env`.** `RAG_API_URL` can
+be set (or left at its default) with the feature still off — the two are
+independent on purpose, so a dashboard that has never been told the other
+service exists doesn't show an "Ask" tab that quietly points at
+`localhost:8000`. Turning it on is a deliberate act on **Console →
+Features**, not a side effect of configuration. Full reasoning:
+`../knowledge/design-decisions.md`.

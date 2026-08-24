@@ -422,6 +422,61 @@ This is also documented as a common pitfall (`common-pitfalls.md`) because
 it's easy to reach for the familiar `slack` name in `ossec.conf` out of
 habit.
 
+## RAG assistant: proxied through the backend, never called from the browser
+
+**Decision:** the Ask page's JavaScript calls `/rag/ask` on this
+dashboard's own backend, which then calls the RAG service's `/ask`
+server-side (`services/rag_pipeline.py`). The browser never has
+`RAG_API_URL` in a `fetch()` call.
+
+**Alternatives considered and rejected:**
+
+| Alternative | Why rejected |
+|---|---|
+| Browser calls `RAG_API_URL` directly | Two concrete failures, not a style preference: the RAG service sends no CORS headers permitting the dashboard's origin, so the request would simply be blocked; and `localhost` inside that `fetch` resolves to whichever machine the *browser* happens to be running on, which is only the machine running the RAG service by coincidence — a dashboard opened from a second device would silently fail. |
+| Proxy through the backend (chosen) | `RAG_API_URL` is resolved exactly once, server-side, on the one machine it's actually configured for. Same shape as `services/wazuh_api.py` existing instead of letting a template call the Wazuh API directly. |
+
+**Cost:** one more service module and one more route file to maintain,
+versus zero backend code for the direct-call alternative. Judged worth it
+because the failure modes above are not edge cases — the second one fires
+for anyone who isn't running the dashboard and the RAG service on the same
+machine.
+
+## RAG assistant: a `settings.json` feature flag, not an `.env` variable
+
+**Decision:** the Ask page is reachable only when
+`load_feature_flags()["rag_assistant"]` is `True` — a value the operator
+sets from **Console → Features**, stored under `settings.json`'s
+`"features"` key. `RAG_API_URL` in `.env` is a separate, independent
+setting.
+
+**Why not just check whether `RAG_API_URL` is set?** Because it has a
+default (`http://localhost:8000`) precisely so the dashboard doesn't
+require configuring it before anything else works — which means "is
+`RAG_API_URL` set" is true on every install, whether or not the operator
+has ever heard of the RAG service or has one running. Using it as the
+on/off switch would mean the Ask page appears on every dashboard by
+default, pointing at a `localhost` address that, on most installs,
+answers nothing.
+
+**Why a `settings.json` flag instead of a third `.env` variable
+(`RAG_ASSISTANT_ENABLED=true`) doing the gating:** an `.env` change
+requires editing a file and restarting the process; a Console toggle is
+one click, discoverable from inside the running app, and consistent with
+how every other opt-in behavior in this dashboard is already switched
+(`mail`, `plugins` follow the same `settings.json` sub-key shape —
+`../development/coding-standards.md`). It also means turning the feature
+off doesn't require knowing where `.env` lives on this particular
+deployment.
+
+**Enforced twice, deliberately.** `config.feature_enabled()` (a Jinja
+global, evaluated fresh on every render — see its docstring for why a
+per-route context variable was rejected) hides the sidebar link.
+*Independently*, `routes/rag.py`'s own handlers re-check the same flag and
+answer with a 404 when it's off. The second check is not redundant: hiding
+a link is presentation, not access control, and a request that already
+knows the URL must be turned away regardless of what the sidebar shows.
+
 ## Frontend third-party libraries: vendored locally, not CDN-loaded
 
 **Decision:** Chart.js, Lucide, and the Manrope/JetBrains Mono fonts ship as

@@ -2,7 +2,7 @@
 
 Scope: what the `pytest` suite covers, where it cuts, and the conventions
 it depends on. Run it with `pytest` from the repo root (`pytest.ini` sets
-`pythonpath = .`). 315 tests, no network access required.
+`pythonpath = .`). 397 tests, no network access required.
 
 ## The one rule that matters most
 
@@ -53,12 +53,27 @@ version mocked service functions such as `agent_command()` and therefore
 exercised only the route body. Stubbing the transport means route, service
 and error mapping are all under test together.
 
+## The other seam: `restarts`, an autouse fixture
+
+Every API-backed write now restarts the manager (`services/manager_control.py`).
+Left unmocked, that would mean every such test either reaches for real SSH
+(blocked by the transport guard, so the test would fail) or has to
+individually stub `run_restart_command_via_ssh`. Instead `tests/conftest.py`
+defines an **autouse** `restarts` fixture: every test gets a working,
+recorded restart for free, and can call `restarts.fail("message")` to
+simulate one failing, or check `restarts.count` to assert how many actually
+happened (e.g. exactly one for a three-write service-check, zero for a
+rejected write). Because it's autouse, no test has to opt in — but a test
+asserting restart *behaviour* still requests `restarts` explicitly as an
+argument, the same way `api_stub` is requested despite the transport guard
+underneath it also being autouse.
+
 ## What each directory covers
 
 | Directory | Covers | Seam |
 |---|---|---|
-| `tests/services/` | Service-layer logic in isolation — `ossec_config` (XML round-trip, block CRUD, identity rules, backups), `agents` (agents, groups, inventory normalisation), `ssh_transport` (the three remaining senders), logging | `api_stub`, or a mocked `paramiko.SSHClient` |
-| `tests/api/` | Route behaviour — auth gating, validation-before-call, response shapes, error → status mapping | `api_stub` |
+| `tests/services/` | Service-layer logic in isolation — `ossec_config` (XML round-trip, block CRUD, identity rules, backups), `agents` (agents, groups, inventory normalisation), `ssh_transport` (all four senders, plus the shared `_run()` drain loop directly — stderr draining, the deadline, the exit-status race), `manager_control` (the restart guarantee itself), logging | `api_stub`, the autouse `restarts` fixture, or a mocked `paramiko.SSHClient` |
+| `tests/api/` | Route behaviour — auth gating, validation-before-call, response shapes, error → status mapping. Includes `test_rag.py`: the feature-flag gate (off by default, checked at the route as well as the sidebar) and the `/rag/ask` proxy | `api_stub`; `test_rag.py` adds its own `rag_stub` (stands in for the RAG service) and `isolated_settings` (a `settings.json` in a temp dir, so toggling the flag in one test can't leak into another) |
 | `tests/integrations/` | The composed path: browser → route → service → transport, and the ordering guarantees | `api_stub` + mocked SSH senders |
 | `tests/utils/` | Manager-side tools as units, run directly on this machine | none — they touch tmp files only |
 
