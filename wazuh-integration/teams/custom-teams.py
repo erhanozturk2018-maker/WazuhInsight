@@ -15,7 +15,6 @@ logging.basicConfig(
 def main():
     alert_file = sys.argv[1]
     hook_url = html.unescape(sys.argv[3])
-    logging.info(f"ALINAN HOOK_URL: {hook_url}")
     with open(alert_file) as f:
         alert = json.load(f)
 
@@ -46,9 +45,9 @@ def main():
 
     try:
         r = requests.post(hook_url, json=payload, timeout=10)
-        logging.info(f"gonderildi, HTTP durum kodu={r.status_code}")
+        logging.info(f"Sended, HTTP status code={r.status_code}")
     except Exception as e:
-        logging.error(f"HATA: istek gonderilemedi - {e}")
+        logging.error(f"ERROR: Query could not send - {e}")
 
 if __name__ == "__main__":
     main()
